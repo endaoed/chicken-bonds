@@ -44,7 +44,7 @@ def constrained_beta_with_nonlinear_param():
 
 def additive_beta_composition():
     fig = go.FigureWidget()
-    scatt_1 = fig.add_scatter(name="summed beta")
+    scatt_1 = fig.add_scatter(name="summed beta", line={"color" : "blue", "width": 4})
     scatt_2 = fig.add_scatter(name="added beta")
     xs=np.linspace(0, 1, 100)
             
@@ -72,7 +72,7 @@ def additive_beta_composition():
 
 def multiplicative_beta_composition():
     fig = go.FigureWidget()
-    scatt_1 = fig.add_scatter(name="composite Beta")
+    scatt_1 = fig.add_scatter(name="composite Beta", line={"color" : "blue", "width": 3})
     scatt_2 = fig.add_scatter(name="imposed Beta")
     xs=np.linspace(0, 1, 100)
             
@@ -98,83 +98,121 @@ def multiplicative_beta_composition():
     return fig
 
 
-r1, r2, r3 = np.array([0, 35]), np.array([1e3, 5e6]), np.array([1, 10])
-v1, v2 = [12, 3.2e3, 3], [35, 1.78e4, 2e153]
+def multiplicative_beta_composition2():
+    fig = go.FigureWidget()
+    scatt_1 = fig.add_scatter(name="composite Beta", line={"color" : "blue", "width": 3})
+    scatt_2 = fig.add_scatter(name="imposed Beta 1")
+    scatt_3 = fig.add_scatter(name="imposed Beta 2")
+    scatt_4 = fig.add_scatter(name="imposed Beta 3")
+    xs=np.linspace(0, 1, 100)
+    
+    slider = (1.5, 10, 0.001)
+    @interact(red=slider, green=slider, purple=slider)
+    def update(red=1.5, green=1.5, purple=1.5):
+        with fig.batch_update():
+            scatt_1.data[0].x=xs
+            scatt_1.data[0].y=beta(red + green + purple, 
+                                   12-red + 12-green + 12-purple).pdf(xs)
+            scatt_2.data[1].x=xs
+            scatt_2.data[1].y=beta(red, 12-red).pdf(xs)
+            scatt_3.data[2].x=xs
+            scatt_3.data[2].y=beta(green, 12-green).pdf(xs)
+            scatt_4.data[3].x=xs
+            scatt_4.data[3].y=beta(purple, 12-purple).pdf(xs)
 
-ranges = [[r1, "polynomial", 3], [r2, "log", 2], [r3, "uniform", 1]]
-versions = [v1, v2]
+    return fig
 
 
-def modifier(style:str, velocity=None):
-    assert style in ["log", "polynomial", "uniform"] # add as many as you want
-    if style == "polynomial":
-        assert velocity != None
-        return lambda x : x ** velocity
-    elif style == "log":
-        assert velocity != None
-        g = lambda x : np.log(x) / np.log(2)
-        return lambda x : g(x) + abs(g(x)[np.isfinite(g(x))].min())
-    elif style == "uniform":
-        return lambda x : "uniform"
 
-def range_to_unit(r, val= None):
-    """r is an np array of the range interval"""
-    if val == "uniform":
-        return "uniform"
-    r = np.array(r)
-    r_max, r_min = r.max(), r.min()
+# +
+def remapper(r1: np.ndarray, r2: np.ndarray, val=None):
+    """general remapper. Maps r1 to r2"""
+    assert type(r1) == type(r2) == np.ndarray
+    min1, max1 = r1.min(), r1.max()
+    min2, max2 = r2.min(), r2.max()
     if val == None:
-        return (r - r_min)/(r_max - r_min)
+        return (r1 - min1) * (max2 - min2) / (max1 - min1) + min2
     else:
-        return (val - r_min)/(r_max - r_min)
+        return (val - min1) * (max2 - min2) / (max1 - min1) + min2
+    
+def modifier_dict(style:str, velocity=None):
+    """
+    rudimentary dictionary of modifiers
+    """
+    assert style in ["logarithmic", "polynomial", "uniform", "linear"] # add whatever
+    if style == "uniform":
+        return lambda x : "uniform"
+    else:
+        assert velocity != None
+        if style == "polynomial":
+            return lambda x : x ** velocity
+        elif style == "logarithmic":
+            g = lambda x : np.log(x)
+            return lambda x : g(x) + abs(g(x)[np.isfinite(g(x))].min())
+        elif style == "linear":
+            return lambda x : velocity * x
 
-def unit_to_alpha_beta(val):
-    """Converty modified range to allowed alpha range 1.5 - 10.5"""
-    if val == "uniform": 
+def f1_range_to_unit(var_range : np.ndarray, velocity: float, modifier: str, val=None):
+    """
+    Maps the variable range to the unit via modifier.
+    If val=None, it outputs the remapped range
+    else it behaves as a function for the val
+    """
+    if modifier == "uniform": return "uniform"
+    unit = np.array([0, 1])
+    modifier = modifier_dict(modifier, velocity)
+    m = modifier(var_range)
+    m_val = modifier(val)
+    if val != None:
+        # piecemeal logic
+        if val < var_range.min():
+            return 0.
+        if val > var_range.max():
+            return 1.
+        return remapper(m, unit, m_val)
+    else:
+        return remapper(m, unit)
+
+def f2_unit_to_alpha_beta(x):
+    if x == "uniform":
         return 1, 1
-    a_min, a_max = 1.5, 10.5
-#     alpha_range = np.array([a_min, a_max])
-    alpha = val * (a_max - a_min) + a_min
+    alpha = 9 * x + 1.5
     return alpha, 12 - alpha
 
-def compose(instant_values):
-    """compose params across vars"""
-    alpha, beta = instant_values.sum(axis=0)
-    return alpha, beta
+def composer(propensities, values):
+    """Stitch everything together"""
+    param_pairs = {}
+    sum_a, sum_b = 0, 0
+    for var, vals in propensities.items():
+        var_range, velocity, modifier = vals.values()
+        unit_out = f1_range_to_unit(var_range, velocity, modifier, values[var])
+        a, b = f2_unit_to_alpha_beta(unit_out)
+        sum_a += a
+        sum_b += b
+        param_pairs[var] = {"alpha" : a, "beta" : b}
+    final_params = [sum_a, sum_b]
+    return param_pairs, final_params
 
-def instance(versions, ranges, verbose=False):
-    """identify an actual value"""
-    version_param_mat = []
-    for v in versions:
-        individual_parameter_list = []
-        for i, range_details in enumerate(ranges):
-            r, mod, vel = range_details
-            f = modifier(mod, vel)
-            modified = f(v[i])
-            unit_modified = range_to_unit(f(r), val=modified) # scale everything ofc
-#             print("version" , v[i])
-#             print("Modified unit: ", unit_modified)
-            alpha, beta = unit_to_alpha_beta(unit_modified)
-            individual_parameter_list.append([alpha, beta])
-        individual_parameter_list = np.array(individual_parameter_list)
-        composed_parameters = compose(individual_parameter_list)
-        version_param_mat.append([individual_parameter_list, composed_parameters])
-        if verbose:
-            print("alpha, beta matrix: ", individual_parameter_list)
-            print("composed parameters: ", composed_parameters)
-    return version_param_mat
-
-def plot_summary():
-    _, ax = plt.subplots(2, 2, figsize=(12, 8))
-    for i, v in enumerate(instance(versions, ranges)):
-        param_list, param_sum = v
+def plot_output(output_params):
+    _, ax = plt.subplots(2, 2, figsize=(12, 6))
+    _.suptitle("Example Outputs")
+    for i, version in enumerate(output_params):
+        var_params, summed = version[0], version[1]
+        beta_details = [(name, params.values()) for name, params in var_params.items()]
         x = np.linspace(0, 1, 100)
-        b1 = beta(*param_list[0]).pdf(x)
-        b2 = beta(*param_list[1]).pdf(x)
-        b3 = beta(*param_list[2]).pdf(x)
-#         print(i, param_list, "\n\n")
-        ax[0, i].set(title="Individual Beta Distributions V{}".format(i+1))
-        ax[0, i].plot(x, b1, x, b2, x, b3)
-        ax[1, i].set(title="Composed Beta Distributions V{}".format(i+1))
-        ax[1, i].plot(x, beta(*param_sum).pdf(x))
+        for n, p in beta_details:
+            size = 3 if n == "bond_age " else 1
+            ax[0, i].plot(x, beta(*p).pdf(x), label=n)
+        ax[1, i].plot(x, beta(*summed).pdf(x), label="Composite Beta")
+        
+    ax=ax.flatten()
+    [x.legend() for x in ax]
 
+def output_version_results(versions):
+    for i, v in enumerate(versions):
+        individual, composed = v
+        print("\nVERSION {}\n".format(i), "\tIndividual params:")
+        for n, p in individual.items():
+            print("\t", n, "\t", "a: {:.2f}, b: {:.2f}".format(*p.values()))
+        print("\nComposed params: \t a: {:.2f} b: {:.2f}\n".format(*composed))
+    return
